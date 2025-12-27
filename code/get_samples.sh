@@ -6,7 +6,7 @@ data_folder=$1
 
 # Global args
 dev_pct=0.1
-max_dev_samples=100
+max_dev_samples=100000
 shuf_seed=123
 
 
