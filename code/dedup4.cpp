@@ -975,7 +975,7 @@ void print_usage(const char* program_name) {
               << "Options:\n"
               << "  -e, --evaluation-method <str>  Evaluation method: per_kmer | per_sample_agnostic | per_sample_threshold (default: per_kmer)\n"
               << "  -a, --agnostic-retain-pct <float>  Likelihood to retain a sample with any duplication/ambiguity in per_sample_agnostic mode [0,1] (default: 0.0)\n"
-              << "  -k, --kmer <int>           K-mer size (default: 32)\n"
+              << "  -k, --kmer <int>           K-mer size [1,32] (default: 32)\n"
               << "  -l, --sample-len <int>     Sample length (default: 1000)\n"
               << "  -m, --min-sample-len <int> Minimum sample length (default: same as sample_len)\n"
               << "  -o, --output-dir <path>    Output directory (default: dedup_out/)\n"
