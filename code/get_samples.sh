@@ -8,9 +8,10 @@ data_folder=$1
 dev_pct=0.1
 max_dev_samples=100000
 shuf_seed=123
+no_txt=false
 
 
-while getopts ":i:p:m:s:" opt; do
+while getopts ":i:p:m:s:t" opt; do
     case $opt in
         i)
             data_folder="$OPTARG"
@@ -24,14 +25,17 @@ while getopts ":i:p:m:s:" opt; do
         s)
             shuf_seed="$OPTARG"
             ;;
+        t)
+            no_txt=true
+            ;;
         \?)
             echo "Invalid option: -$OPTARG" >&2
-            echo "Usage: $0 -i input_folder -p dev_pct -m max_dev_samples -s seed"
+            echo "Usage: $0 -i input_folder -p dev_pct -m max_dev_samples -s seed [-t]"
             exit 1
             ;;
         :)
             echo "Option -$OPTARG requires an argument." >&2
-            echo "Usage: $0 -i input_folder -p dev_pct -m max_dev_samples -s seed"
+            echo "Usage: $0 -i input_folder -p dev_pct -m max_dev_samples -s seed [-t]"
             exit 1
             ;;
     esac
@@ -39,8 +43,8 @@ done
 
 # Check if all required arguments are provided and not empty
 if [ -z "$data_folder" ] || [ -z "$dev_pct" ] || [ -z "$max_dev_samples" ] || [ -z "$shuf_seed" ]; then
-    echo "Error: All arguments (-i, -p, -m, -s) are required and cannot be empty."
-    echo "Usage: $0 -i input_folder -p output_folder -m max_dev_samples -s seed"
+    echo "Error: Required arguments (-i, -p, -m, -s) cannot be empty."
+    echo "Usage: $0 -i input_folder -p output_folder -m max_dev_samples -s seed [-t]"
     exit 1
 fi
 
@@ -82,5 +86,13 @@ for sample_bed in $sample_beds; do
 	echo "Partitioning samples"
 	./code/partition_samples.sh $sample_bed $dev_pct $max_dev_samples $shuf_seed
 done
-echo "Finished partitioning samples into train/dev sets. Aggregating and retrieving sequences now"
-./code/aggregate_and_track_samples.sh $data_folder $shuf_seed 
+if [ "$no_txt" = false ]; then
+    echo "Finished partitioning samples into train/dev sets. Aggregating and retrieving sequences now"
+    ./code/aggregate_and_track_samples.sh $data_folder $shuf_seed
+
+else
+    echo "Finished paritioning samples into train/dev sets. Aggregating and shuffling bed files."
+    echo "./code/aggregate_and_track_samples.sh $data_folder $shuf_seed -t"
+    ./code/aggregate_and_track_samples.sh $data_folder $shuf_seed -t
+fi
+
