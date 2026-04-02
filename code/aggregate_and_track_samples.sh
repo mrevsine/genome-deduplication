@@ -16,6 +16,7 @@
 
 in_dir=$1
 random_seed=$2
+no_txt=${3:-false}
 
 train_bed=${in_dir}/all_train.bed
 dev_bed=${in_dir}/all_dev.bed
@@ -36,12 +37,16 @@ for file in $train_files; do
         temp_fasta=$(mktemp -t temp_fasta.XXXXXX).fa
         gunzip -c "$fasta_file" > "$temp_fasta"
         bedtools getfasta -fi "$temp_fasta" -bed "$file" -tab > $temp_bed
-        cut -f2 $temp_bed | tr '[:lower:]' '[:upper:]' >> $train_txt
+        if [ "$no_txt" = false ]; then
+            cut -f2 $temp_bed | tr '[:lower:]' '[:upper:]' >> $train_txt
+        fi
         awk -v basename="$file_basename" '{print $0 "\t" basename}' $file >> $train_bed
         rm "$temp_fasta"
     else
         bedtools getfasta -fi "$fasta_file" -bed "$file" -tab > $temp_bed
-        cut -f2 $temp_bed | tr '[:lower:]' '[:upper:]' >> $train_txt
+        if [ "$no_txt" = false ]; then
+            cut -f2 $temp_bed | tr '[:lower:]' '[:upper:]' >> $train_txt
+        fi
         awk -v basename="$file_basename" '{print $0 "\t" basename}' $file >> $train_bed
     fi
 done
@@ -54,22 +59,32 @@ for file in $dev_files; do
         temp_fasta=$(mktemp -t temp_fasta.XXXXXX).fa
         gunzip -c "$fasta_file" > "$temp_fasta"
         bedtools getfasta -fi "$temp_fasta" -bed "$file" -tab >> $temp_bed
-        cut -f2 $temp_bed | tr '[:lower:]' '[:upper:]' >> $dev_txt
+        if [ "$no_txt" = false ]; then
+            cut -f2 $temp_bed | tr '[:lower:]' '[:upper:]' >> $dev_txt
+        fi
         awk -v basename="$file_basename" '{print $0 "\t" basename}' $file >> $dev_bed
         rm "$temp_fasta"
     else
         bedtools getfasta -fi "$fasta_file" -bed "$file" -tab >> $temp_bed
-        cut -f2 $temp_bed | tr '[:lower:]' '[:upper:]' >> $dev_txt
+        if [ "$no_txt" = false ]; then
+            cut -f2 $temp_bed | tr '[:lower:]' '[:upper:]' >> $dev_txt
+        fi
         awk -v basename="$file_basename" '{print $0 "\t" basename}' $file >> $dev_bed
     fi
 done
 
 #Now shuffle the train and dev bed files
 shuf --random-source="$train_bed" -o ${train_bed}.shuf $train_bed
-shuf --random-source="$train_bed" -o ${train_txt}.shuf $train_txt
+if [ "$no_txt" = false ]; then
+    shuf --random-source="$train_bed" -o ${train_txt}.shuf $train_txt
+fi
 shuf --random-source="$dev_bed" -o ${dev_bed}.shuf $dev_bed
-shuf --random-source="$dev_bed" -o ${dev_txt}.shuf $dev_txt
+if [ "$no_txt" = false ]; then
+    shuf --random-source="$dev_bed" -o ${dev_txt}.shuf $dev_txt
+fi
 mv ${train_bed}.shuf $train_bed
 mv ${dev_bed}.shuf $dev_bed
-mv ${train_txt}.shuf $train_txt
-mv ${dev_txt}.shuf $dev_txt
+if [ "$no_txt" = false ]; then
+    mv ${train_txt}.shuf $train_txt
+    mv ${dev_txt}.shuf $dev_txt
+fi
