@@ -209,6 +209,21 @@ def condense_masked_regions(masked):
 	return masked_regions
 
 
+# Merge ignored regions 
+# e.g. [(0,100), (100,200), (300,400), (350,450)] -> [(0,200), (300,450)]
+def condense_ignored_regions(ignored_regions):
+	merged_ignored_regions = []
+	if len(ignored_regions) == 0:
+		return merged_ignored_regions
+	region_start = ignored_regions[0][0]
+	for i in range(len(ignored_regions)-1):
+		if ignored_regions[i][1] < ignored_regions[i+1][0]:
+			merged_ignored_regions.append((region_start, ignored_regions[i][1]))
+			region_start = ignored_regions[i+1][0]
+	merged_ignored_regions.append((region_start, ignored_regions[-1][1]))
+	return merged_ignored_regions
+
+
 # Get all kmers from a given sample set
 # Used when resuming deduplication from previous run to not have to re-duplicate completed inputs
 def compute_seen_kmers_from_bed_and_fasta(samples_bed, fasta, k):
@@ -551,7 +566,7 @@ def check_sample(seq, internal_N_regions, seen_kmers, k, dedup_parameter, min_sa
 			# Record the entire region up to and including the original kmer as ignored
 			# Importantly, we do not denote the original kmer as a duplicate, since it is
 			# both not in the global set and is not added to a sample
-			skipped_region = (0, next_start_offset)
+			skipped_region = (0, next_start_offset + k - 1)
 
 		# Else if a match to a global kmer
 		else:
@@ -564,7 +579,7 @@ def check_sample(seq, internal_N_regions, seen_kmers, k, dedup_parameter, min_sa
 
 			# Record the entire region up to but not including the offending kmer as ignored
 			if first_duplicate_idx > 0:
-				skipped_region = (0, first_duplicate_idx)
+				skipped_region = (0, first_duplicate_idx + k - 1)
 
 	# If truncating_duplicate_idx is > -1, this is a shortened sample
 	# Since the sequence before it is accepted, truncating duplicate_idx is now a global repeat
@@ -661,7 +676,7 @@ def check_sample_retain_info(seq, internal_N_regions, global_seen_kmers, k, dedu
 	for ignored_region_start, ignored_region_end in ignored_regions_before_ambiguous_bases:
 		seq_info[ignored_region_start:ignored_region_end] = seq_info.encoding_dict["ignored"]
 
-	print(valid_kmer_start_ranges)
+	# print(valid_kmer_start_ranges)
 
 	###=========================================================================
 	### Accumulate all needed variables regardless of evaluation mode
@@ -828,7 +843,7 @@ def check_sample_retain_info(seq, internal_N_regions, global_seen_kmers, k, dedu
 			# Record the entire region up to and including the original kmer as ignored
 			# Importantly, we do not denote the original kmer as a duplicate, since it is
 			# both not in the global set and is not added to a sample
-			skipped_region = (0, next_start_offset)
+			skipped_region = (0, next_start_offset + k - 1)
 
 		# Else if a match to a global kmer
 		else:
@@ -841,7 +856,7 @@ def check_sample_retain_info(seq, internal_N_regions, global_seen_kmers, k, dedu
 
 			# Record the entire region up to but not including the offending kmer as ignored
 			if first_duplicate_idx > 0:
-				skipped_region = (0, first_duplicate_idx)
+				skipped_region = (0, first_duplicate_idx + k - 1)
 
 	# If truncating_duplicate_idx is > -1, this is a shortened sample
 	# Since the sequence before it is accepted, truncating duplicate_idx is now a global repeat
@@ -976,7 +991,7 @@ def deduplicate_seq(seq, seen_kmers, args):
 								no_overlap_samples, 
 								evaluation_method)
 			
-			print(f"Checked sample from {sample_start} to {sample_end}: checked_sample_len: {checked_sample_len}, duplicate_start_idx: {duplicate_start_idx}, ignored_regions: {sample_ignored_regions}, next_start_offset: {next_start_offset}")
+			# print(f"Checked sample from {sample_start} to {sample_end}: checked_sample_len: {checked_sample_len}, duplicate_start_idx: {duplicate_start_idx}, ignored_regions: {sample_ignored_regions}, next_start_offset: {next_start_offset}")
 			
 			###=====================================================================
 			### Update regions with result of evaluation method call
@@ -1009,6 +1024,7 @@ def deduplicate_seq(seq, seen_kmers, args):
 
 	# Convert masked starting indices to regions for more condensed bed files
 	masked_regions = condense_masked_regions(masked_starts)
+	ignored_regions = condense_ignored_regions(ignored_regions)
 
 	return sample_regions, masked_regions, ignored_regions, ambiguous_regions, seen_kmers
 
@@ -1151,6 +1167,7 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 
 	# Convert masked starting indices to regions for more condensed bed files
 	masked_regions = condense_masked_regions(masked_starts)
+	ignored_regions = condense_ignored_regions(ignored_regions)
 
 	return sample_regions, masked_regions, ignored_regions, ambiguous_regions, seen_kmers
 
