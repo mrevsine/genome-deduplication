@@ -946,18 +946,27 @@ def deduplicate_seq(seq, seen_kmers, args):
 	N_consecutive_allowed_Ns = args.allowed_consecutive_ambiguous_chars 
 	valid_contigs, ambiguous_regions = get_contigs_from_chromosome(seq, N_consecutive_allowed_Ns)
 
+	# If the seq is shorter than min_sample_len, we can still analyze it if allow-whole-contigs is set
+	# This only applies if the whole contig is valid. Otherwise, the sample is invalidated by the Ns policy
+	allow_whole_contigs_override = args.allow_whole_contigs and len(seq) < min_sample_len and len(valid_contigs) == 1 
+
 	# Analyze all valid contigs, looking at all possible samples within each contig
 	for contig_start, contig_end, contig_N_regions in valid_contigs:
    
 		# Needed global vars
 		sample_start = contig_start
-		max_start_idx = contig_end - min_sample_len # final possible start index
+		max_start_idx = contig_end - min_sample_len # final possible start index; 
+
+		# Allow the short sample to be analyzed if allow_whole_contigs_override is set
+		if allow_whole_contigs_override:
+			if max_start_idx < sample_start:
+				max_start_idx = sample_start
 
 		# Investigate every possible sample
 		while sample_start <= max_start_idx:
 
 			# Get boundary for this possible sample
-			sample_end = min(len(seq), sample_start + sample_len) # Checking against seq len is only necessary for final sample
+			sample_end = min(contig_end, sample_start + sample_len) # Checking against seq len is only necessary for final sample
 
 			###=====================================================================
 			### Get internal N regions for this sample
@@ -1069,11 +1078,13 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 	# Get positions of all valid kmers and all ambiguous characters
 	N_consecutive_allowed_Ns = args.allowed_consecutive_ambiguous_chars 
 	valid_contigs, ambiguous_regions = get_contigs_from_chromosome(seq, N_consecutive_allowed_Ns)
-	# print(valid_contigs)
-	# print(ambiguous_regions)
+
+	# If the seq is shorter than min_sample_len, we can still analyze it if allow-whole-contigs is set
+	# This only applies if the whole contig is valid. Otherwise, the sample is invalidated by the Ns policy
+	allow_whole_contigs_override = args.allow_whole_contigs and len(seq) < min_sample_len and len(valid_contigs) == 1 
 
 	# Analyze all valid contigs, looking at all possible samples within each contig
-	for i, (contig_start, contig_end, contig_N_regions) in enumerate(valid_contigs):
+	for contig_start, contig_end, contig_N_regions in valid_contigs:
 
 		# Instantiate object to store sample info between iterations for this contig
 		seq_info = SeqInfo(sample_len, k)
@@ -1082,11 +1093,16 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 		sample_start = contig_start
 		max_start_idx = contig_end - min_sample_len # final possible start index
 
+		# Allow the short sample to be analyzed if allow_whole_contigs_override is set
+		if allow_whole_contigs_override:
+			if max_start_idx < sample_start:
+				max_start_idx = sample_start
+
 		# Investigate every possible sample
 		while sample_start <= max_start_idx:
 
 			# Get boundary for this possible sample
-			sample_end = min(len(seq), sample_start + sample_len) # Checking against seq len is only necessary for final sample
+			sample_end = min(contig_end, sample_start + sample_len) # Checking against seq len is only necessary for final sample
 
 			###=====================================================================
 			### Get internal N regions for this sample
@@ -1103,7 +1119,7 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 						first_overlapping_region_idx = i
 						found_first_overlapping_region = True  
 					sample_N_regions.append((max(N_start, sample_start + seq_info.offset) - sample_start, min(N_end, sample_end) - sample_start))
-				
+
 			# To avoid redundant computations, drop any N regions that we have passed
 			contig_N_regions = contig_N_regions[first_overlapping_region_idx:]
 
@@ -1300,6 +1316,7 @@ def __main__():
 	## Collect input args
 	parser = argparse.ArgumentParser()
 	parser.add_argument("input", nargs="+", help="Input list of FASTA files or a txt file with one FASTA file per line")
+	parser.add_argument("--allow-whole-contigs", action="store_true", help="Allow whole contigs as samples, even if they are shorter than min_sample_len")
 	parser.add_argument("-d", "--dedup_param", type=float, default=0.0, 
 						help="Parameter controlling the amount of allowed duplication. Set to 0 for strict deduplication in any mode." + 
 						"Per-kmer mode: per-kmer retention rate. Per-sample-agnostic mode: per-sample retention rate. Per-sample-threshold mode: duplicate base % threshold")
