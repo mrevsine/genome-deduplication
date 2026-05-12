@@ -1,8 +1,4 @@
-### New attempt to deduplicate a fasta
-
-# sample_regions are inclusive at the start, exclusive at the end
-# masked_starts are the start coordinates of the masked kmers
-# skipped_regions are inclusive at the start, exclusive at the end
+### Deduplication of genomic sequences 
 
 ###=============================================================================
 ### Imports
@@ -13,7 +9,6 @@ import gzip
 import json
 import numpy as np
 import os
-import pickle
 import random as rng
 import re
 import struct
@@ -32,11 +27,11 @@ class SeqInfo:
 		if encoding_dict is None:
 			encoding_dict = {
 				"unannotated": 0,
-				"unique": 1, #
+				"unique": 1, 
 				"ignored": 2,
-				"ambiguous": 3, #
+				"ambiguous": 3, 
 				"internal repeat": 4,
-				"global repeat": 5 #
+				"global repeat": 5 
 			}
 		self.encoding_dict = encoding_dict
 		self.arr = np.zeros(seqlen, dtype=np.uint8) 
@@ -145,16 +140,6 @@ def encode_kmer(kmer):
 	return kmer_num
 
 
-def decode_kmer(kmer_num, k=32):
-	char_map = {0:'A', 1:'C', 2:'G', 3:'T'}
-	kmer = []
-	for _ in range(k):
-		nucleotide_code = kmer_num & 3 # 0x11
-		kmer.append(char_map[nucleotide_code])
-		kmer_num >>= 2
-	return ''.join(reversed(kmer))
-
-
 def get_fasta_basename(fasta):
 	n_suffixes = 2 if fasta.endswith(".gz") else 1
 	fasta_basename = '.'.join(os.path.basename(fasta).split('.')[:-(n_suffixes)])
@@ -194,21 +179,6 @@ def condense_masked_regions(masked):
 			region_start = masked[i+1]
 	masked_regions.append((region_start, masked[-1] + 1))
 	return masked_regions
-
-
-# # Merge ignored regions 
-# # e.g. [(0,100), (100,200), (300,400), (350,450)] -> [(0,200), (300,450)]
-# def condense_ignored_regions(ignored_regions):
-# 	merged_ignored_regions = []
-# 	if len(ignored_regions) == 0:
-# 		return merged_ignored_regions
-# 	region_start = ignored_regions[0][0]
-# 	for i in range(len(ignored_regions)-1):
-# 		if ignored_regions[i][1] < ignored_regions[i+1][0]:
-# 			merged_ignored_regions.append((region_start, ignored_regions[i][1]))
-# 			region_start = ignored_regions[i+1][0]
-# 	merged_ignored_regions.append((region_start, ignored_regions[-1][1]))
-# 	return merged_ignored_regions
 
 
 # Get all kmers from a given sample set
@@ -287,7 +257,8 @@ def read_seen_kmers(seen_kmers_file):
 
 
 # Write bed files detailing the label of each kmer in the input fasta
-def write_region_beds(kmer_region_annotations, file_prefix, write_ambiguous=False, write_ignored=False, write_masks=False):
+def write_region_beds(kmer_region_annotations, file_prefix, 
+					  write_ambiguous=False, write_ignored=False, write_masks=False):
 
 	write_bed_types = ["samples"]
 	if write_ambiguous:
@@ -341,20 +312,27 @@ def get_contigs_from_chromosome(seq, N_consecutive_allowed_Ns):
 
 
 # Function to check a sample for duplicates, allowing some rate of duplicates
-def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_parameter, min_sample_len, overlap, evaluation_mode):
+def check_sample(seq, sample_offset, internal_N_regions, global_seen_kmers, k, 
+				 dedup_parameter, min_sample_len, overlap, evaluation_mode, seq_info):
 
 	###=========================================================================
-	### Global data
+	### Sequence attributes that will be returned
 
-	# Data structure for new kmers in this sample
-	sample_seen_kmers = {}
-	
-	# Sequence attributes that will be returned
 	sample_end_coord = len(seq)
 	duplicate_start_idx = -1
 	ignored_regions = []
 	skipped_region = None
 	next_start_offset = len(seq) - overlap
+
+	# Data structure for new kmers in this sample
+	sample_seen_kmers = {} if seq_info is None else None
+
+	###=========================================================================
+	### Record positions of ambiguous bases in retain info mode
+
+	if seq_info is not None:
+		for N_start, N_end in internal_N_regions:
+			seq_info[N_start:N_end] = seq_info.encoding_dict["ambiguous"]
 
 	###=========================================================================
 	### Using the internal N regions, get all ranges of start indices of valid kmers 
@@ -362,8 +340,8 @@ def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_pa
 
 	# Get contigs based on ambiguous chars
 	valid_kmer_start_ranges = []
-	valid_region_start = sample_offset
 	ignored_regions_before_ambiguous_bases = []
+	valid_region_start = sample_offset
 	for N_start, N_end in internal_N_regions:
 		final_kmer_start = N_start - k
 
@@ -383,6 +361,13 @@ def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_pa
 	if final_kmer_start >= valid_region_start:
 		valid_kmer_start_ranges.append((valid_region_start, final_kmer_start + 1))
 
+	###=========================================================================
+	### Record positions of ignored regions in retain info mode
+
+	if seq_info is not None:
+		for ignored_region_start, ignored_region_end in ignored_regions_before_ambiguous_bases:
+			seq_info[ignored_region_start:ignored_region_end] = seq_info.encoding_dict["ignored"]
+	
 	###=========================================================================
 	### Accumulate all needed variables regardless of evaluation mode
 
@@ -406,6 +391,7 @@ def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_pa
 	###=========================================================================
 	### Check all contigs
 
+	## Loop through all kmers in this possible sample
 	for valid_start, valid_end in valid_kmer_start_ranges:
 
 		if done_evaluating:
@@ -413,16 +399,72 @@ def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_pa
 
 		for kmer_start_idx in range(valid_start, valid_end):
 
-			# Get kmer and its encoding for storage
-			kmer = seq[kmer_start_idx:kmer_start_idx+k]
-			kmer_num = encode_kmer(kmer)
+			is_global_repeat = False
+			is_local_repeat = False
+			kmer_encoding = -1
+			local_match_idx = -1
 
-			# If we haven't seen this kmer before, record it in the sample kmers
-			duplicate_match_idx = sample_seen_kmers.get(kmer_num, -1)
-			if duplicate_match_idx == -1 and kmer_num not in seen_kmers:
-				sample_seen_kmers[kmer_num] = kmer_start_idx
+			## Don't retain info mode
+			if seq_info is None:
 
-			# If we've seen this kmer before, potentially stop analyzing this sample
+				# 1. Encode kmer
+				kmer = seq[kmer_start_idx:kmer_start_idx+k]
+				kmer_encoding = encode_kmer(kmer)
+
+				# 2. Check if local repeat
+				local_match_idx = sample_seen_kmers.get(kmer_encoding, -1)
+				if local_match_idx >= 0:
+					is_local_repeat = True
+
+				# 3. If not local repeat, check if global repeat
+				elif kmer_encoding in global_seen_kmers:
+					is_global_repeat = True
+			
+			## Retain info mode
+			else:
+
+				# 1. Check if this kmer was previously annotated as ambiguous, unique, or ignored; if so, skip
+				idx_info = seq_info[kmer_start_idx]
+				if idx_info in [
+						seq_info.encoding_dict["ambiguous"], # Ns are Ns
+						seq_info.encoding_dict["unique"], # already declared distinct from all kmers before it
+						seq_info.encoding_dict["ignored"] # see below
+					]:
+					continue
+
+				# 2. Check if this kmer was previously annotated as a global repeat; 
+				#    if so, make a note that we don't need to query global kmers
+				if idx_info == seq_info.encoding_dict["global repeat"]:
+					is_global_repeat = True
+
+				# 3. If we don't already know what this kmer is, query it like normal
+				else:
+
+					# 4. Encode kmer
+					kmer = seq[kmer_start_idx:kmer_start_idx+k]
+					kmer_encoding = encode_kmer(kmer)
+
+					# 5. Check if local repeat
+					local_match_idx = seq_info.get_kmer_idx(kmer_encoding)
+					if local_match_idx >= 0: # aka if this kmer is in the sample_seen_kmers
+						seq_info[kmer_start_idx] = seq_info.encoding_dict["internal repeat"]
+						is_local_repeat = True
+
+					# 6. If not local repeat, check if global repeat
+					elif idx_info == seq_info.encoding_dict["unannotated"] and kmer_encoding in global_seen_kmers:
+						seq_info[kmer_start_idx] = seq_info.encoding_dict["global repeat"]
+						is_global_repeat = True
+
+			# If this kmer is novel, record it in the local kmers
+			if not is_global_repeat and not is_local_repeat:
+				if seq_info is None:
+					sample_seen_kmers[kmer_encoding] = kmer_start_idx
+				else:
+					seq_info.record_kmer(kmer_encoding, kmer_start_idx)
+					seq_info[kmer_start_idx] = seq_info.encoding_dict["unique"]
+
+			# If this kmer was a repeat, handle it according to the evaluation mode
+			# Unless we have already decided on the sample's fate in per-sample agnostic mode
 			elif not already_decided_agnostic:
 
 				# In per-kmer mode, decide whether to reject this same based on a coin flip with respect to this kmer
@@ -438,20 +480,23 @@ def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_pa
 						if not found_first_duplicate:
 							found_first_duplicate = True
 							first_duplicate_idx = kmer_start_idx
-							first_duplicate_match_idx = duplicate_match_idx
+							first_duplicate_match_idx = local_match_idx
 
 				# In per-sample agnostic mode, decide on the whole sample based on a coin flip when we reach the first offending kmer
 				elif evaluation_mode == "per_sample_agnostic":
 
+					# Accept sample immediately, but keep analyzing kmers just to record them in sample_seen_kmers
 					if dedup_parameter > 0 and rng.random() < dedup_parameter:
-						already_decided_agnostic = True # Accept sample immediately, but keep analyzing kmers just to record them in sample_seen_kmers
+						already_decided_agnostic = True 
 						continue
+
+					# Don't analyze any more kmers, accept or reject now based on whether we have reached min_sample_len
 					else:
-						done_evaluating = True # Don't analyze any more kmers, accept or reject now based on whether we have reached min_samaple_len
+						done_evaluating = True 
 						if not found_first_duplicate:
 							found_first_duplicate = True
 							first_duplicate_idx = kmer_start_idx
-							first_duplicate_match_idx = duplicate_match_idx
+							first_duplicate_match_idx = local_match_idx
 
 				elif evaluation_mode == "per_sample_threshold":
 
@@ -459,7 +504,7 @@ def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_pa
 					if not found_first_duplicate:
 						found_first_duplicate = True
 						first_duplicate_idx = kmer_start_idx
-						first_duplicate_match_idx = duplicate_match_idx
+						first_duplicate_match_idx = local_match_idx
 
 					# Update duplication counts
 					n_duplicate_kmers += 1
@@ -482,11 +527,9 @@ def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_pa
 					if n_duplicate_bases > n_allowed_full_length_duplicate_bases:
 						done_evaluating = True
 
-				# If the previous step causes us to reject the sample already, record needed data and prepare to return
-				if done_evaluating:
-
-					# We have finished processing this sample
-					break
+			# If the previous step causes us to reject the sample already, record needed data and prepare to return
+			if done_evaluating:
+				break
 
 	###=========================================================================
 	### Decide what to do with this sample
@@ -544,7 +587,6 @@ def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_pa
 
 		# The next sample should start at 1 + the current position
 		next_start_offset = max(sample_end_coord - overlap, truncating_duplicate_idx + 1)
-		# next_start_offset = sample_end_coord if no_overlap_samples else truncating_duplicate_idx + 1
 
 	###=========================================================================
 	### Get all ignored regions before next start offset
@@ -573,428 +615,10 @@ def check_sample(seq, sample_offset, internal_N_regions, seen_kmers, k, dedup_pa
 	return sample_end_coord, duplicate_start_idx, ignored_regions, next_start_offset, sample_seen_kmers
 
 
-# Function to check a sample for duplicates, allowing some rate of duplicates
-def check_sample_retain_info(seq, sample_offset, internal_N_regions, global_seen_kmers, k, dedup_parameter, min_sample_len, overlap, evaluation_mode, seq_info):
-
-	###=========================================================================
-	### Global data
-
-	# Relevant global variables
-	sample_end_coord = len(seq)
-	duplicate_start_idx = -1
-	ignored_regions = []
-	skipped_region = None
-	next_start_offset = len(seq) - overlap
-
-	###=========================================================================
-	### Record positions of ambiguous bases
-
-	for N_start, N_end in internal_N_regions:
-		seq_info[N_start:N_end] = seq_info.encoding_dict["ambiguous"]
-
-	###=========================================================================
-	### Get new contigs after seq_info_offset
-	### Also record ignored regions before ambiguous chars
-
-	# Get contigs based on ambiguous chars
-	valid_kmer_start_ranges = []
-	ignored_regions_before_ambiguous_bases = []
-	valid_region_start = sample_offset
-	for N_start, N_end in internal_N_regions:
-		final_kmer_start = N_start - k
-
-		# Record final k-1 bases before N as ignored
-		ignored_region_start = max(valid_region_start, final_kmer_start + 1)
-		if ignored_region_start < N_start:
-			ignored_regions_before_ambiguous_bases.append((ignored_region_start, N_start))
-
-		# Record region before this as valid
-		if final_kmer_start >= valid_region_start:
-			valid_kmer_start_ranges.append((valid_region_start, final_kmer_start + 1))
-			valid_region_start = N_end
-
-	# No need to record anything for final k-1 bases, which should remain unannotated
-	# Just record final valid region
-	final_kmer_start = len(seq) - k
-	if final_kmer_start >= valid_region_start:
-		valid_kmer_start_ranges.append((valid_region_start, final_kmer_start + 1))
-	
-	# Denote all ignored regions
-	for ignored_region_start, ignored_region_end in ignored_regions_before_ambiguous_bases:
-		seq_info[ignored_region_start:ignored_region_end] = seq_info.encoding_dict["ignored"]
-
-	###=========================================================================
-	### Accumulate all needed variables regardless of evaluation mode
-
-	# Used by all methods
-	done_evaluating = False
-	found_first_duplicate = False
-	first_duplicate_idx = -1 # Index of first instance of duplicate kmer
-	first_duplicate_match_idx = -1 # Index of first instance of local repeat
-
-	# Only for per-sample agnostic mode
-	already_decided_agnostic = False
-
-	# Only for per-sample threshold mode
-	n_duplicate_kmers = 0 # Currently unused, but could be used in a future version
-	n_duplicate_bases = 0
-	last_duplicate_end_idx = -1
-	n_allowed_full_length_duplicate_bases = int(np.floor(dedup_parameter * len(seq)))
-	below_allowed_duplication_threshold = True
-	exceed_duplication_threshold_idx = -1
-
-	###=========================================================================
-	### Check all contigs
-
-	## Loop through all kmers in this possible sample
-	for valid_start, valid_end in valid_kmer_start_ranges:
-
-		if done_evaluating:
-			break
-
-		for kmer_start_idx in range(valid_start, valid_end):
-
-			repeat_kmer = False
-			duplicate_match_idx = -1
-
-			idx_info = seq_info[kmer_start_idx]
-			if idx_info in [
-					seq_info.encoding_dict["ambiguous"], # Ns are Ns
-					seq_info.encoding_dict["unique"], # already declared distinct from all kmers before it
-					seq_info.encoding_dict["ignored"] # see below
-				]:
-				continue
-
-			elif idx_info == seq_info.encoding_dict["global repeat"]:
-				repeat_kmer = True
-
-			# Ignored can never be un-ignored. 3 types of ignored:
-			# 	1. K-1 bases before Ns; always consistent
-			# 	2. Min_sample_len-1 bases before end of contig; always consistent and not even set in this function
-			# 	3. Spans from start of proposed sample to first problem when rejected; 
-			# 		always in the past, i.e. never looked at again after being labelled thusly, 
-			# 		because next start offset is always the end of the ignored region + 1
-
-			# If we haven't already recorded this as a global kmer, check for it being a repeat
-			if not repeat_kmer:
-
-				# Get kmer and its encoding for storage
-				kmer = seq[kmer_start_idx:kmer_start_idx+k]
-				kmer_num = encode_kmer(kmer)
-
-				# If local repeat
-				duplicate_match_idx = seq_info.get_kmer_idx(kmer_num)
-				if duplicate_match_idx >= 0: # aka if this kmer is in the sample_seen_kmers
-					seq_info[kmer_start_idx] = seq_info.encoding_dict["internal repeat"]
-					repeat_kmer = True
-
-				# If global repeat 
-				# No need to check global kmer set if this was previously annotated as local repeat 
-				# This is because 
-				elif idx_info == seq_info.encoding_dict["unannotated"] and kmer_num in global_seen_kmers:
-					seq_info[kmer_start_idx] = seq_info.encoding_dict["global repeat"]
-					repeat_kmer = True
-				
-				# If not a repeat
-				else:
-					seq_info[kmer_start_idx] = seq_info.encoding_dict["unique"]
-					seq_info.record_kmer(kmer_num, kmer_start_idx)
-
-			# If this kmer was a repeat, handle it according to the evaluation mode
-			if repeat_kmer and not already_decided_agnostic:
-
-				# In per-kmer mode, decide whether to reject this same based on a coin flip with respect to this kmer
-				if evaluation_mode == "per_kmer":
-
-					# Continue analyzing kmers, "pretend" this wasn't a duplicate
-					if dedup_parameter > 0 and rng.random() < dedup_parameter:
-						continue 
-
-					# Done with sample; decide whether to accept or reject based on whether we have reached min_sample_len
-					else:
-						done_evaluating = True 
-						if not found_first_duplicate:
-							found_first_duplicate = True
-							first_duplicate_idx = kmer_start_idx
-							first_duplicate_match_idx = duplicate_match_idx
-
-				# In per-sample agnostic mode, decide on the whole sample based on a coin flip when we reach the first offending kmer
-				elif evaluation_mode == "per_sample_agnostic":
-
-					if dedup_parameter > 0 and rng.random() < dedup_parameter:
-						already_decided_agnostic = True # Accept sample immediately, but keep analyzing kmers just to record them in sample_seen_kmers
-						continue
-					else:
-						done_evaluating = True # Don't analyze any more kmers, accept or reject now based on whether we have reached min_samaple_len
-						if not found_first_duplicate:
-							found_first_duplicate = True
-							first_duplicate_idx = kmer_start_idx
-							first_duplicate_match_idx = duplicate_match_idx
-
-				elif evaluation_mode == "per_sample_threshold":
-
-					# Record possible first duplicate
-					if not found_first_duplicate:
-						found_first_duplicate = True
-						first_duplicate_idx = kmer_start_idx
-						first_duplicate_match_idx = duplicate_match_idx
-
-					# Update duplication counts
-					n_duplicate_kmers += 1
-					if kmer_start_idx >= last_duplicate_end_idx:
-						n_duplicate_bases += k
-					else:
-						n_duplicate_bases += k - (last_duplicate_end_idx - kmer_start_idx)
-					last_duplicate_end_idx = kmer_start_idx + k
-
-					# Make a note if we have yet to exceed the allowed rate of duplication
-					# This can be used to salvage a sample < len but >= min_sample_len
-					if (n_duplicate_bases / (kmer_start_idx+k)) <= dedup_parameter:
-						below_allowed_duplication_threshold = True
-						exceed_duplication_threshold_idx = -1
-					elif below_allowed_duplication_threshold == True:
-						below_allowed_duplication_threshold = False
-						exceed_duplication_threshold_idx = kmer_start_idx
-
-					# Early exit if we have already exceeded the max allowed duplication
-					if n_duplicate_bases > n_allowed_full_length_duplicate_bases:
-						done_evaluating = True
-
-			if done_evaluating:
-				break
-
-	###=========================================================================
-	### Decide what to do with this sample
-
-	# The position of the kmer that caused us to cut the sample off early
-	truncating_duplicate_idx = exceed_duplication_threshold_idx \
-								if evaluation_mode == "per_sample_threshold" \
-								else first_duplicate_idx
-	invalid_sample = truncating_duplicate_idx > -1 and truncating_duplicate_idx < min_sample_len
-
-	# If the offending kmer is within min_sample_len, this sample is invalid
-	if invalid_sample:
-
-		# Since this sample is invalid, we can denote its length as -1 and discard its seen kmers
-		sample_end_coord = -1
-
-		# If a local duplicate
-		is_local_duplicate = first_duplicate_match_idx > -1
-		if is_local_duplicate:
-
-			# The next sample should start at the original kmer's position + 1
-			next_start_offset = first_duplicate_match_idx + 1
-
-			# Record the entire region up to and including the original kmer as ignored
-			# Importantly, we do not denote the original kmer as a duplicate, since it is
-			# both not in the global set and is not added to a sample
-			skipped_region = (0, next_start_offset + k - 1)
-
-		# Else if a match to a global kmer
-		else:
-
-			# The next sample should start at the current position + 1
-			next_start_offset = first_duplicate_idx + 1
-
-			# Record the current kmer as a duplicate
-			duplicate_start_idx = first_duplicate_idx
-
-			# Record the entire region up to but not including the offending kmer as ignored
-			if first_duplicate_idx > 0:
-				skipped_region = (0, first_duplicate_idx + k - 1)
-
-	# If truncating_duplicate_idx is > -1, this is a shortened sample
-	# Since the sequence before it is accepted, truncating duplicate_idx is now a global repeat
-	# If the offending kmer is past min_sample_len, there is still a valid sample with what we have
-	# Whether the repeat is internal or global, the current kmer is the offending one
-	# ^ This is because the sample is now accepted, meaning the repeat is now global
-	elif truncating_duplicate_idx > -1:
-
-		# The final valid kmer is truncating_duplicate_idx - 1, so the sample end is truncating_duplicate_idx - 1 + k
-		sample_end_coord = truncating_duplicate_idx - 1 + k 
-
-		# The current kmer is a duplicate
-		duplicate_start_idx = truncating_duplicate_idx
-
-		# The next sample should start at 1 + the current position
-		next_start_offset = max(sample_end_coord - overlap, truncating_duplicate_idx + 1)
-
-	###=========================================================================
-	### Get all ignored regions before next start offset
-
-	# If skipped region is defined, we are rejecting the sample
-	# In this case, the entirety of what we skip over is ignored, so 
-	# skipped region is all-encompassing
-	# We will address any other repeats in a future iteration
-	if skipped_region is not None:
-
-		ignored_regions = [skipped_region]
-
-	# If ignored region is not defined, either the sample was rejected at idx=0
-	# or it was accepted. In these cases, it is possible that some of the 
-	# ignored regions before Ns could be before next start offset
-	else:
-		
-		for ignored_start, ignored_end in ignored_regions_before_ambiguous_bases:
-			if ignored_start >= next_start_offset:
-				break
-			ignored_regions.append((ignored_start, min(ignored_end, next_start_offset)))
-
-	###=========================================================================
-	### Return all needed data
-
-	return sample_end_coord, duplicate_start_idx, ignored_regions, next_start_offset
-
-
 ###=============================================================================
 ### Main functions
 
-## Main Deduplication ================
-def deduplicate_seq(seq, seen_kmers, args):
-
-	###=========================================================================
-	### Set up needed data
-
-	# Collect needed args
-	k = args.kmer
-	sample_len = args.sample_len
-	min_sample_len = args.min_sample_len
-	overlap = args.overlap
-	evaluation_method = args.evaluation_method
-	dedup_param = args.dedup_param
-
-	# Instantiate seen_kmers if None
-	if seen_kmers is None:
-		seen_kmers = set()
-
-	# Set up storage for samples, masked regions, and ignored regions
-	sample_regions = []
-	masked_starts = []
-	ignored_regions = []
-
-	###=========================================================================
-	### Early exit conditions
-	### If input sequence is too short, return null values
-
-	# Check validity of inputs
-	if min_sample_len is not None and len(seq) < min_sample_len:
-		print("Warning: the sequence length is less than min_sample_len. Skipping this sequence.")
-		return [], [], [(0,len(seq))], [], seen_kmers 
-	if min_sample_len is None and len(seq) < sample_len:
-		print("Warning: the sequence length is less than sample_len. Skipping this sequence.")
-		return [], [], [(0,len(seq))], [], seen_kmers 
-
-	###=========================================================================
-	### Main loop logic; process each potential sample in the sequence
-
-	# Get positions of all valid kmers and all ambiguous characters
-	N_consecutive_allowed_Ns = args.allowed_consecutive_ambiguous_chars 
-	valid_contigs, ambiguous_regions = get_contigs_from_chromosome(seq, N_consecutive_allowed_Ns)
-
-	# If the seq is shorter than min_sample_len, we can still analyze it if allow-whole-contigs is set
-	# This only applies if the whole contig is valid. Otherwise, the sample is invalidated by the Ns policy
-	allow_whole_contigs_override = args.allow_whole_contigs and len(seq) < min_sample_len and len(valid_contigs) == 1 
-
-	# Analyze all valid contigs, looking at all possible samples within each contig
-	for contig_start, contig_end, contig_N_regions in valid_contigs:
-   
-		# Needed global vars
-		sample_start = contig_start
-		max_start_idx = contig_end - min_sample_len # final possible start index; 
-		sample_offset = 0 # Offset within the sample, used if overlap is > k-1
-
-		# Allow the short sample to be analyzed if allow_whole_contigs_override is set
-		if allow_whole_contigs_override:
-			if max_start_idx < sample_start:
-				max_start_idx = sample_start
-
-		# Investigate every possible sample
-		while sample_start <= max_start_idx:
-
-			# Get boundary for this possible sample
-			sample_end = min(contig_end, sample_start + sample_len) # Checking against seq len is only necessary for final sample
-
-			###=====================================================================
-			### Get internal N regions for this sample
-			
-			# Create sample_N_regions containing the relative coordinates of Ns within this sample, ranging from 0 to sample_len
-			first_overlapping_region_idx = 0
-			found_first_overlapping_region = False
-			sample_N_regions = []
-			for i, (N_start, N_end) in enumerate(contig_N_regions):
-				if N_start >= sample_end:
-					break
-				if N_end > sample_start + sample_offset:
-					if not found_first_overlapping_region:
-						first_overlapping_region_idx = i
-						found_first_overlapping_region = True  
-					sample_N_regions.append((max(N_start, sample_start + sample_offset) - sample_start, min(N_end, sample_end) - sample_start))
-
-			# To avoid redundant computations, drop any N regions that we have passed
-			contig_N_regions = contig_N_regions[first_overlapping_region_idx:]
-
-			###=====================================================================
-			### Evaluate this sample
-
-			checked_sample_len, duplicate_start_idx, sample_ignored_regions, next_start_offset, sample_seen_kmers = \
-				check_sample(seq[sample_start:sample_end], 
-				 				sample_offset, 
-				 				sample_N_regions, 
-								seen_kmers, 
-								k, 
-								dedup_param, 
-								min_sample_len, 
-								min(overlap, (sample_end - sample_start) - 1), # Overlap cannot be longer than sample length - 1
-								evaluation_method)
-			
-			# print(f"Checked sample from {sample_start} to {sample_end}, sample_offset: {sample_offset}, checked_sample_len: {checked_sample_len}, duplicate_start_idx: {duplicate_start_idx}, ignored_regions: {sample_ignored_regions}, next_start_offset: {next_start_offset}")
-			
-			###=====================================================================
-			### Update regions with result of evaluation method call
-
-			# Add sample to samples if valid
-			if checked_sample_len > -1:
-				sample_regions.append((sample_start, sample_start + checked_sample_len))
-			
-			# Record the duplicate if any was found
-			if duplicate_start_idx > -1:
-				masked_starts.append(sample_start + duplicate_start_idx)
-
-			# Add ignored regions if any were found
-			for ignored_region in sample_ignored_regions:
-				ignored_regions.append((sample_start+ignored_region[0], sample_start+ignored_region[1]))
-
-			# Update seen kmers with any sample-specific kmers
-			if sample_seen_kmers is not None:
-				seen_kmers.update(sample_seen_kmers)
-
-			###=====================================================================
-			### Housekeeping for next iteration
-
-			# Set start index of next iteration of the loop
-			sample_start = sample_start + next_start_offset
-
-			# How many kmers to ignore in the next iteration
-			if checked_sample_len == -1:
-				sample_offset = 0
-			else:
-				sample_offset = max(0, sample_end - sample_start - (k-1))
-
-		###=========================================================================
-		### Final housekeeping 
-
-		# Record possible ignored sequence at the end
-		if sample_start < contig_end:
-			ignored_regions.append((sample_start, contig_end))
-
-	# Convert masked starting indices to regions for more condensed bed files
-	masked_regions = condense_masked_regions(masked_starts)
-	# ignored_regions = condense_ignored_regions(ignored_regions)
-
-	return sample_regions, masked_regions, ignored_regions, ambiguous_regions, seen_kmers
-
-
-def deduplicate_seq_retain_info(seq, seen_kmers, args):
+def deduplicate_seq(seq, seen_kmers, retain_info, args):
 
 	###=========================================================================
 	### Set up needed data
@@ -1043,7 +667,7 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 	for contig_start, contig_end, contig_N_regions in valid_contigs:
 
 		# Instantiate object to store sample info between iterations for this contig
-		seq_info = SeqInfo(sample_len, k)
+		seq_info = SeqInfo(sample_len, k) if retain_info else None
    
 		# Needed global vars
 		sample_start = contig_start
@@ -1075,7 +699,9 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 					if not found_first_overlapping_region:
 						first_overlapping_region_idx = i
 						found_first_overlapping_region = True  
-					sample_N_regions.append((max(N_start, sample_start + sample_offset) - sample_start, min(N_end, sample_end) - sample_start))
+					sample_N_regions.append((
+						max(N_start, sample_start + sample_offset) - sample_start, 
+						min(N_end, sample_end) - sample_start))
 
 			# To avoid redundant computations, drop any N regions that we have passed
 			contig_N_regions = contig_N_regions[first_overlapping_region_idx:]
@@ -1083,22 +709,25 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 			###=====================================================================
 			### Evaluate this sample
 
-			seq_info.current_global_idx = sample_start
-			seq_info.current_sample_length = sample_end - sample_start
+			if seq_info is not None:
+				seq_info.current_global_idx = sample_start
+				seq_info.current_sample_length = sample_end - sample_start
 
 			# print(f"BEFORE: CIGAR={seq_info.get_cigar()}; SEEN KMERS={len(seq_info.sample_seen_kmers)}")
 
-			checked_sample_len, duplicate_start_idx, sample_ignored_regions, next_start_offset = \
-				check_sample_retain_info(seq[sample_start:sample_end], 
-							 						sample_offset,
-													sample_N_regions, 
-													seen_kmers, 
-													k, 
-													dedup_param, 
-													min_sample_len,
-													min(overlap, (sample_end - sample_start) - 1), # Overlap cannot be longer than sample length - 1
-													evaluation_method,
-													seq_info)
+			checked_sample_len, duplicate_start_idx, sample_ignored_regions, next_start_offset, sample_seen_kmers = \
+				check_sample(
+					seq[sample_start:sample_end], 
+					sample_offset,
+					sample_N_regions, 
+					seen_kmers, 
+					k, 
+					dedup_param, 
+					min_sample_len,
+					min(overlap, (sample_end - sample_start) - 1), # Overlap cannot be longer than sample length - 1
+					evaluation_method,
+					seq_info
+				)
 
 			# print(f"Checked sample from {sample_start} to {sample_end}: checked_sample_len: {checked_sample_len}, duplicate_start_idx: {duplicate_start_idx}, ignored_regions: {sample_ignored_regions}, next_start_offset: {next_start_offset}")
 			# print(f"AFTER: CIGAR={seq_info.get_cigar()}; SEEN KMERS={len(seq_info.sample_seen_kmers)}")
@@ -1107,21 +736,21 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 			###=====================================================================
 			### Update regions with result of evaluation method call
 
-			# Add sample to samples if valid
+			# If we found a valid sample, record it and its seen kmers
 			if checked_sample_len > -1:
 				sample_regions.append((sample_start, sample_start + checked_sample_len))
+				if seq_info is None:
+					seen_kmers.update(sample_seen_kmers)
+				else:
+					seen_kmers.update(seq_info.sample_seen_kmers)
 			
 			# Record the duplicate if any was found
 			if duplicate_start_idx > -1:
 				masked_starts.append(sample_start + duplicate_start_idx)
 
-			# Add ignored region if any was found
+			# Record the ignored regions if any were found
 			for ignored_region in sample_ignored_regions:
 				ignored_regions.append((sample_start+ignored_region[0], sample_start+ignored_region[1]))
-
-			# Update seen kmers with any sample-specific kmers
-			if checked_sample_len > -1:
-				seen_kmers.update(seq_info.sample_seen_kmers)
 
 			###=====================================================================
 			### Housekeeping for next iteration
@@ -1135,11 +764,12 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 			else:
 				sample_offset = max(0, sample_end - sample_start - (k-1))
 
-			# Update seq_info with the number of cleared bases
-			seq_info.move_internal_pointer(next_start_offset, last_sample_accepted=(checked_sample_len > -1))
+			# Update seq_info with the number of cleared bases in retain mode
+			if seq_info is not None:
+				seq_info.move_internal_pointer(next_start_offset, last_sample_accepted=(checked_sample_len > -1))
 
 		###=========================================================================
-		### Final housekeeping 
+		### Final housekeeping at the end of a contig
 
 		# Record possible ignored sequence at the end
 		if sample_start < contig_end:
@@ -1147,7 +777,6 @@ def deduplicate_seq_retain_info(seq, seen_kmers, args):
 
 	# Convert masked starting indices to regions for more condensed bed files
 	masked_regions = condense_masked_regions(masked_starts)
-	# ignored_regions = condense_ignored_regions(ignored_regions)
 
 	return sample_regions, masked_regions, ignored_regions, ambiguous_regions, seen_kmers
 
@@ -1169,10 +798,8 @@ def deduplicate_genome(fasta, seen_kmers, args):
 			clean_sequence = get_clean_sequence(sequence)
 
 			# Deduplicate this sequence
-			if args.retain_info:
-				sample_regions, masked_regions, skipped_regions, ambiguous_regions, seen_kmers = deduplicate_seq_retain_info(clean_sequence, seen_kmers, args)
-			else:
-				sample_regions, masked_regions, skipped_regions, ambiguous_regions, seen_kmers = deduplicate_seq(clean_sequence, seen_kmers, args)
+			sample_regions, masked_regions, skipped_regions, ambiguous_regions, seen_kmers = \
+				deduplicate_seq(clean_sequence, seen_kmers, args.retain_info, args)
 
 			# print(f"Seen kmer size: {sys.getsizeof(seen_kmers)}")
 
@@ -1282,7 +909,8 @@ def deduplicate(args):
 	## Initialize seen kmers here
 	## 5 options: either or both of args.seen_kmers and last_checkpoint_kmers_file could be set;
 	## If both are set, they could either be the same file or different files
-	## Only difficult case is if both are set and different, in which case we will take the union of the two sets of kmers and issue a warning about it
+	## Only difficult case is if both are set and different, 
+	## in which case we will take the union of the two sets of kmers and issue a warning about it
 
 	if args.seen_kmers is None:
 
@@ -1330,6 +958,8 @@ def deduplicate(args):
 				all_beds_exist = False
 				break
 
+		out_prefix = os.path.join(args.output_dir, fasta_basename)
+
 		# If we already completed this file, compute its kmer set from its samples
 		# This is the case where we save kmers every nth fasta, and this is past that but still completed
 		if all_beds_exist:
@@ -1345,8 +975,8 @@ def deduplicate(args):
 			seen_kmers, kmer_region_annotations = deduplicate_genome(fasta, seen_kmers, args)
 
 			# Write bed files for this fasta
-			out_prefix = os.path.join(args.output_dir, fasta_basename)
-			write_region_beds(kmer_region_annotations, out_prefix, args.write_ambiguous_beds, args.write_ignored_beds, args.write_masked_beds)
+			write_region_beds(kmer_region_annotations, out_prefix, 
+					 args.write_ambiguous_beds, args.write_ignored_beds, args.write_masked_beds)
 
 		# Optionally save seen kmers after this fasta
 		save_kmers_to_file = args.save_every > 0 and (next_fasta_idx+i+1) % args.save_every == 0
