@@ -2,6 +2,12 @@
 
 `synopsis` is the command-line entry point for running FASTA deduplication. It supports running a single dataset, running many files independently in sequence, running many files independently in parallel on a Slurm cluster, or merging/shuffling previously deduplicated files together.
 
+## Requirements
+
+- Bash 4+ or Zsh
+- bedtools
+- C++17 compiler and zlib
+
 ## Usage
 
 ```
@@ -129,7 +135,7 @@ synopsis_batch_<eval_method>.sh
 
 e.g. `synopsis_batch_kmer.sh` or `synopsis_batch_sample-threshold.sh`.
 
-The `--array` range is computed automatically based on the number of resolved input files — it is not configurable in the config file.
+The `--array` range is computed automatically based on the number of resolved input files. Set `max_concurrent_jobs` to a positive integer to limit how many array tasks run concurrently; it is emitted as the Slurm `%<number>` array limit.
 
 ### Slurm config file format
 
@@ -151,6 +157,7 @@ output=""
 error=""
 mail-user=""
 mail-type=""
+max_concurrent_jobs=""
 
 ###LOCAL SETUP (ENVIRONMENTS, MODULES, ETC)###
 #_____________________________
@@ -164,6 +171,7 @@ source activate my_env
 - `key` must be one of the recognized Slurm long-option names listed above (any other key is an error).
 - Any key left as `key=""` (empty value) is skipped — no corresponding `#SBATCH` line is generated.
 - Any key with a non-empty value generates a `#SBATCH --<key>="<value>"` line in the output script.
+- `max_concurrent_jobs` is a special key: it must be a positive integer and is appended to the computed array range as `%<number>` rather than emitted as its own `#SBATCH` option.
 - `array` is **not** a valid key here; it is always computed and injected automatically.
 
 **Section 2 — `###LOCAL SETUP (ENVIRONMENTS, MODULES, ETC)###`:**

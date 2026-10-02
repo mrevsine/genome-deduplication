@@ -23,22 +23,22 @@ DEDUP_BIN="$ROOTDIR/$primary_binary"
 SHUFFLE_SCRIPT="$ROOTDIR/shuffle_method.sh"
 
 readonly MODE_WORDS=(individual batch shuffle)
-readonly VALID_EVAL_METHODS=(kmer sample-threshold)
+readonly VALID_EVAL_METHODS=(kmer sample)
 
 declare -A EVAL_METHOD_MAP=(
     [kmer]="per_kmer"
-    [sample-threshold]="per_sample_threshold"
+    [sample]="per_sample_threshold"
 )
 readonly EVAL_METHOD_MAP
 
-readonly SLURM_KEYS=(job-name account partition time mem cpus-per-task ntasks nodes gres output error mail-user mail-type)
+readonly SLURM_KEYS=(job-name account partition time mem cpus-per-task ntasks nodes gres output error mail-user mail-type max_concurrent_jobs)
 
 usage() {
     echo "Usage:"
-    echo "  Direct mode (default):   $0 [kmer|sample-threshold] [options] <input file|list>"
-    echo "  Individual mode:         $0 individual [kmer|sample-threshold] [options] <input file|list>"
-    echo "  Batch mode:              $0 batch [kmer|sample-threshold] --config <config_file> [-y] [options] <input file|list>"
-    echo "  Shuffle mode:            $0 shuffle [kmer|sample-threshold] [options] <file_list> <indir>"
+    echo "  Direct mode (default):   $0 [kmer|sample] [options] <input file|list>"
+    echo "  Individual mode:         $0 individual [kmer|sample] [options] <input file|list>"
+    echo "  Batch mode:              $0 batch [kmer|sample] --config <config_file> [-y] [options] <input file|list>"
+    echo "  Shuffle mode:            $0 shuffle [kmer|sample] [options] <file_list> <indir>"
     echo ""
     echo "Dedup options (shared across all modes):"
     echo "  -d <float>  dedup_param"
@@ -153,8 +153,8 @@ if [[ -z "$eval_method" ]]; then
     eval_method="kmer"
 fi
 
-if [[ "$mode" == "shuffle" ]] && [[ "$eval_method" != "kmer" && "$eval_method" != "sample-threshold" ]]; then
-    die "shuffle mode only accepts kmer or sample-threshold as its eval method"
+if [[ "$mode" == "shuffle" ]] && [[ "$eval_method" != "kmer" && "$eval_method" != "sample" ]]; then
+    die "shuffle mode only accepts kmer or sample as its eval method"
 fi
 
 if [[ $# -gt 0 ]]; then
@@ -187,6 +187,7 @@ shuffle_x=0
 
 config_file=""
 submit_now=0
+max_concurrent_jobs=""
 
 args=()
 while [[ $# -gt 0 ]]; do
@@ -319,6 +320,12 @@ parse_slurm_config() {
             done
             [[ "$known" -eq 1 ]] || die "unknown slurm config key: $key"
 
+            if [[ "$key" == "max_concurrent_jobs" ]]; then
+                [[ "$val" =~ ^[1-9][0-9]*$ ]] || die "max_concurrent_jobs must be a positive integer"
+                max_concurrent_jobs="$val"
+                continue
+            fi
+
             sbatch_result+=("#SBATCH --${key}=\"${val}\"")
         elif [[ "$section" == "freetext" ]]; then
             freetext_result+=("$line")
@@ -348,7 +355,9 @@ if [[ "$mode" == "shuffle" ]]; then
     shuffle_args+=(-e "$mapped_eval")
 
     # exec "$SHUFFLE_SCRIPT" "${shuffle_args[@]}" "$file_list_arg" "$indir_arg"
-    echo 'exec "$SHUFFLE_SCRIPT" "${shuffle_args[@]}" "$file_list_arg" "$indir_arg"'
+    printf '# exec'
+    printf ' %q' "$SHUFFLE_SCRIPT" "${shuffle_args[@]}" "$file_list_arg" "$indir_arg"
+    printf '\n'
 
 
 ## INDIVIDUAL RUN
@@ -385,13 +394,15 @@ elif [[ "$mode" == "batch" ]]; then
     out_script="synopsis_batch_${eval_method}.sh"
 
     max_idx=$(( ${#fasta_list[@]} - 1 ))
+    array_range="0-${max_idx}"
+    [[ -n "$max_concurrent_jobs" ]] && array_range+="%${max_concurrent_jobs}"
 
     {
         echo "#!/bin/bash"
         for line in "${sbatch_lines[@]}"; do
             echo "$line"
         done
-        echo "#SBATCH --array=0-${max_idx}"
+        echo "#SBATCH --array=${array_range}"
         echo ""
         for line in "${freetext_lines[@]}"; do
             echo "$line"
