@@ -1,0 +1,1 @@
+GCA_001786795.1_ASM178679v1_genomic	tests/test-data/GCA_001786795.1_ASM178679v1_genomic.fna.gz

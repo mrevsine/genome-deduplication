@@ -1,0 +1,20 @@
+{
+    "input": ["tests/test-data/GCA_001775245.1_ASM177524v1_genomic.fna.gz"],
+    "allow_whole_contigs": false,
+    "dedup_param": 0,
+    "evaluation_method": "per_sample_threshold",
+    "kmer": 32,
+    "sample_len": 1000,
+    "min_sample_len": 1000,
+    "allowed_consecutive_ambiguous_chars": 0,
+    "output_dir": "tests/synopsis/fixtures/expected_outputs/sample_default/GCA_001775245.1_ASM177524v1_genomic",
+    "seen_kmers": null,
+    "retain_info": false,
+    "save_every": 0,
+    "overlap": 31,
+    "save_kmers_at_end": false,
+    "write_ambiguous_beds": false,
+    "write_ignored_beds": false,
+    "write_masked_beds": false,
+    "seed": 123
+}

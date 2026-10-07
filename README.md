@@ -41,7 +41,7 @@ Examples:
 
 ```sh
 synopsis myfile.fasta                      # direct mode, kmer
-synopsis sample-threshold myfile.fasta     # direct mode, sample-threshold
+synopsis sample myfile.fasta     # direct mode, sample
 synopsis individual files.txt              # individual mode, kmer
 synopsis individual sample-threshold files.txt
 synopsis batch files.txt --config cfg.conf # batch mode, kmer

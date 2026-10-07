@@ -19,10 +19,10 @@ fi
 
 primary_binary="dedup6"
 ROOTDIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-DEDUP_BIN="$ROOTDIR/$primary_binary"
-SHUFFLE_SCRIPT="$ROOTDIR/shuffle_method.sh"
+DEDUP_BIN="${DEDUP_BIN:-$ROOTDIR/$primary_binary}"
+SHUFFLE_SCRIPT="${SHUFFLE_SCRIPT:-$ROOTDIR/shuffle_method.sh}"
 
-readonly MODE_WORDS=(individual batch shuffle)
+readonly MODE_WORDS=(individual shuffle)
 readonly VALID_EVAL_METHODS=(kmer sample)
 
 declare -A EVAL_METHOD_MAP=(
@@ -37,7 +37,7 @@ usage() {
     echo "Usage:"
     echo "  Direct mode (default):   $0 [kmer|sample] [options] <input file|list>"
     echo "  Individual mode:         $0 individual [kmer|sample] [options] <input file|list>"
-    echo "  Batch mode:              $0 batch [kmer|sample] --config <config_file> [-y] [options] <input file|list>"
+    echo "  Batch mode:              $0 individual [kmer|sample] --config <config_file> [-y] [options] <input file|list>"
     echo "  Shuffle mode:            $0 shuffle [kmer|sample] [options] <file_list> <indir>"
     echo ""
     echo "Dedup options (shared across all modes):"
@@ -62,8 +62,8 @@ usage() {
     echo "  -i           generate final ignored bed files"
     echo "  -z           generate final masked bed files"
     echo "  -x           add originally ignored files"
-    echo " Batch:"
-    echo "  --config <file>  config file for sbatch submission"
+    echo " Individual/batch:"
+    echo "  --config <file>  generate a batch script with this config"
     echo "  -y         submit batch script immediately"
     echo ""
 }
@@ -102,7 +102,7 @@ is_valid_input_token() {
 
 basename_noext() {
     local path="$1" base
-    base="$(basename "$path")"
+    base="${path##*/}"
     if [[ "$base" == *.gz ]]; then
         base="${base%.gz}"
     fi
@@ -253,6 +253,14 @@ while getopts ":d:k:l:m:o:p:s:v:rizxyh" opt; do
 done
 shift $((OPTIND - 1))
 
+if [[ "$mode" == "individual" && -n "$config_file" ]]; then
+    mode="batch"
+fi
+
+if [[ "$submit_now" -eq 1 && "$mode" != "batch" ]]; then
+    die "-y requires --config in individual mode"
+fi
+
 if [[ "$mode" == "batch" ]]; then
     [[ -n "$config_file" ]] || die "batch mode requires --config <file>"
     [[ -f "$config_file" ]] || die "config file not found: $config_file"
@@ -354,10 +362,10 @@ if [[ "$mode" == "shuffle" ]]; then
     [[ "$shuffle_x" -eq 1 ]] && shuffle_args+=(-x)
     shuffle_args+=(-e "$mapped_eval")
 
-    # exec "$SHUFFLE_SCRIPT" "${shuffle_args[@]}" "$file_list_arg" "$indir_arg"
-    printf '# exec'
-    printf ' %q' "$SHUFFLE_SCRIPT" "${shuffle_args[@]}" "$file_list_arg" "$indir_arg"
-    printf '\n'
+    exec "$SHUFFLE_SCRIPT" "${shuffle_args[@]}" "$file_list_arg" "$indir_arg"
+    # printf '# exec'
+    # printf ' %q' "$SHUFFLE_SCRIPT" "${shuffle_args[@]}" "$file_list_arg" "$indir_arg"
+    # printf '\n'
 
 
 ## INDIVIDUAL RUN
@@ -373,8 +381,8 @@ elif [[ "$mode" == "individual" ]]; then
         [[ -f "$fasta" ]] || die "input file not found: $fasta"
         sub="$(basename_noext "$fasta")"
         this_out="${output_dir:-.}/${sub}"
-        # "$DEDUP_BIN" "${dedup_args[@]}" -o "$this_out" "$fasta"
-        echo '"$DEDUP_BIN" "${dedup_args[@]}" -o "$this_out" "$fasta"'
+        "$DEDUP_BIN" "${dedup_args[@]}" -o "$this_out" "$fasta"
+        # echo '"$DEDUP_BIN" "${dedup_args[@]}" -o "$this_out" "$fasta"'
 
     done
 
@@ -382,7 +390,7 @@ elif [[ "$mode" == "individual" ]]; then
 ## BATCH MODE
 elif [[ "$mode" == "batch" ]]; then
     input_arg="$1"
-    input_path="$(cd "$(dirname "$input_arg")" && pwd)/$(basename "$input_arg")"
+    input_path="$(cd "$(dirname "$input_arg")" && pwd)/${input_arg##*/}"
     resolve_file_list "$input_arg" fasta_list
 
     [[ ${#fasta_list[@]} -gt 0 ]] || die "no input files found"
@@ -430,9 +438,9 @@ elif [[ "$mode" == "batch" ]]; then
 
     echo "Generated: $out_script"
 
-    # if [[ "$submit_now" -eq 1 ]]; then
-    #     sbatch "$out_script"
-    # fi
+    if [[ "$submit_now" -eq 1 ]]; then
+        sbatch "$out_script"
+    fi
 
 ## STANDARD MODE
 else
@@ -440,6 +448,6 @@ else
     build_dedup_args dedup_args
     dedup_opts=()
     [[ -n "$output_dir" ]] && dedup_opts+=(-o "$output_dir")
-    # exec "$DEDUP_BIN" "${dedup_args[@]}" "${dedup_opts[@]}" "$input_arg"
-    echo 'exec "$DEDUP_BIN" "${dedup_args[@]}" "${dedup_opts[@]}" "$input_arg"'
+    exec "$DEDUP_BIN" "${dedup_args[@]}" "${dedup_opts[@]}" "$input_arg"
+    # echo 'exec "$DEDUP_BIN" "${dedup_args[@]}" "${dedup_opts[@]}" "$input_arg"'
 fi

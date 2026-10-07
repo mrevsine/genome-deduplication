@@ -1,0 +1,1 @@
+GCA_001820145.1_ASM182014v1_genomic	tests/test-data/GCA_001820145.1_ASM182014v1_genomic.fna.gz

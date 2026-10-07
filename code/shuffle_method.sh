@@ -165,7 +165,7 @@ fi
 
 outdir="$indir/final_files"
 combined_file_name="combined_deduped_samples.fasta"
-CURRENT_DEDUP_COMMAND="dedup4"
+CURRENT_DEDUP_COMMAND="dedup6"
 ROOTDIR="$(pwd)"
 
 
